@@ -11,5 +11,5 @@ func NewTestRepository() TestRepository {
 }
 
 func (r *testRepository) GetHello() string {
-	return "Hello"
+	return "Hello!"
 }
