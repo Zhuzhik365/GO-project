@@ -3,8 +3,15 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+)
+
+var (
+	ErrUserAlreadyExists = errors.New("user already exists")
+	ErrUserNotFound      = errors.New("user not found")
 )
 
 type TestRepository interface {
@@ -12,6 +19,8 @@ type TestRepository interface {
 	Init(ctx context.Context) error
 	CreateDBTest(ctx context.Context, body string) (DBTestRecord, error)
 	GetDBTestByID(ctx context.Context, id int64) (DBTestRecord, error)
+	CreateUser(ctx context.Context, params CreateUserParams) (User, error)
+	GetUserByLogin(ctx context.Context, login string) (User, error)
 	Close() error
 }
 
@@ -19,6 +28,20 @@ type DBTestRecord struct {
 	ID        int64     `json:"id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type User struct {
+	ID           int64     `json:"id"`
+	Username     string    `json:"username"`
+	Email        string    `json:"email"`
+	PasswordHash string    `json:"-"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type CreateUserParams struct {
+	Username     string
+	Email        string
+	PasswordHash string
 }
 
 type testRepository struct {
@@ -90,9 +113,55 @@ func (r *testRepository) GetDBTestByID(ctx context.Context, id int64) (DBTestRec
 	return record, nil
 }
 
+func (r *testRepository) CreateUser(ctx context.Context, params CreateUserParams) (User, error) {
+	const q = `
+		INSERT INTO users (username, email, password_hash)
+		VALUES ($1, $2, $3)
+		RETURNING id, username, email, password_hash, created_at
+	`
+
+	var user User
+	err := r.db.QueryRowContext(ctx, q, params.Username, params.Email, params.PasswordHash).
+		Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return User{}, ErrUserAlreadyExists
+		}
+		return User{}, fmt.Errorf("create user: %w", err)
+	}
+
+	return user, nil
+}
+
+func (r *testRepository) GetUserByLogin(ctx context.Context, login string) (User, error) {
+	const q = `
+		SELECT id, username, email, password_hash, created_at
+		FROM users
+		WHERE LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1)
+	`
+
+	var user User
+	err := r.db.QueryRowContext(ctx, q, login).
+		Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash, &user.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return User{}, ErrUserNotFound
+		}
+		return User{}, fmt.Errorf("get user by login: %w", err)
+	}
+
+	return user, nil
+}
+
 func (r *testRepository) Close() error {
 	if r.db == nil {
 		return nil
 	}
 	return r.db.Close()
+}
+
+func isUniqueViolation(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "duplicate key value violates unique constraint") ||
+		strings.Contains(message, "SQLSTATE 23505")
 }

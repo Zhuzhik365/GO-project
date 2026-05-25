@@ -18,6 +18,7 @@ import (
 
 func main() {
 	dsn := getEnv("POSTGRES_DSN", "postgres://postgres:postgres@127.0.0.1:5432/mini_avito?sslmode=disable")
+	jwtSecret := getEnv("JWT_SECRET", "dev-secret-change-me")
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -37,12 +38,16 @@ func main() {
 	}
 	defer repo.Close()
 
-	svc := service.NewTestService(repo)
+	svc := service.NewTestService(repo, jwtSecret)
 	h := handler.NewTestHandler(svc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/test", h.Test)
 	mux.HandleFunc("/dbtest", h.DBTest)
+	mux.HandleFunc("/users/register", h.Register)
+	mux.HandleFunc("/users/login", h.Login)
+	mux.HandleFunc("/register", h.Register)
+	mux.HandleFunc("/login", h.Login)
 
 	server := &http.Server{
 		Addr:    ":8080",

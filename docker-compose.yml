@@ -7,6 +7,7 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/mini_avito?sslmode=disable
+      JWT_SECRET: dev-secret-change-me
     ports:
       - "8080:8080"
 

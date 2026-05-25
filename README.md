@@ -1,6 +1,6 @@
-# GO-project — ЛР2 Docker
+# GO-project — ЛР3 Docker
 
-ЛР2 сделана поверх ЛР1 и теперь полностью запускается через Docker Compose: и Go-сервер, и PostgreSQL.
+ЛР3 сделана поверх ЛР2: сервер из ЛР1 сохранён, работа с PostgreSQL из ЛР2 сохранена, добавлены регистрация пользователя и авторизация с JWT. Теперь и Go-сервер, и PostgreSQL запускаются через Docker Compose.
 
 ## Что осталось от ЛР1
 
@@ -14,16 +14,28 @@ Hello!
 - Для `/test` разрешён только `GET`; другие методы возвращают `405 Method Not Allowed`.
 - Сохранён graceful shutdown по `SIGINT` / `SIGTERM`.
 
-## Что добавлено в ЛР2
+## Что осталось от ЛР2
 
-- PostgreSQL запускается в Docker.
-- Go-сервер тоже запускается в Docker.
-- `docker-compose.yml` поднимает два контейнера: `mini-avito-app` и `mini-avito-postgres`.
-- Приложение подключается к БД внутри Docker-сети по адресу `postgres:5432`.
-- Таблицы создаются автоматически при старте сервера на слое `repository`.
-- `POST /dbtest` записывает строку из тела запроса в таблицу `db_test` и возвращает созданную запись в JSON.
+- PostgreSQL подключается при старте сервера.
+- Таблицы инициализируются на слое `repository`.
+- `POST /dbtest` записывает строку из тела запроса в таблицу `db_test`.
+- Всё запускается через Docker Compose: `mini-avito-app` + `mini-avito-postgres`.
 
-## Запуск всей ЛР2 одной командой
+## Что добавлено в ЛР3
+
+- Таблица `users` используется для хранения пользователей.
+- `POST /users/register` создаёт пользователя в БД.
+- `POST /users/login` проверяет логин/пароль и возвращает JWT-токен.
+- Работа с БД находится в `repository`.
+- Бизнес-логика регистрации, проверки пароля и генерации JWT находится в `service`.
+- HTTP-обработка JSON-запросов находится в `handler`.
+
+Дополнительно добавлены короткие алиасы:
+
+- `POST /register`
+- `POST /login`
+
+## Запуск всей ЛР3 одной командой
 
 ```bash
 docker compose up --build
@@ -80,20 +92,6 @@ HTTP/1.1 200 OK
 Hello!
 ```
 
-Проверка ограничения метода:
-
-```bash
-curl -i -X POST http://localhost:8080/test -d "abc"
-```
-
-Ожидаемый ответ:
-
-```text
-HTTP/1.1 405 Method Not Allowed
-
-method not allowed
-```
-
 ## Проверка ЛР2
 
 ```bash
@@ -113,13 +111,68 @@ Content-Type: application/json
 {"id":1,"body":"hello database","created_at":"..."}
 ```
 
-## Показать, что запись реально лежит в PostgreSQL
+Проверить записи в БД:
 
 ```bash
 docker exec -it mini-avito-postgres psql -U postgres -d mini_avito -c "SELECT * FROM db_test ORDER BY id DESC;"
 ```
 
-Там должна быть строка, которую отправляли через `/dbtest`.
+## Проверка ЛР3: регистрация пользователя
+
+```bash
+curl -i -X POST http://localhost:8080/users/register \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","email":"testuser@example.com","password":"123456"}'
+```
+
+Ожидаемый ответ:
+
+```text
+HTTP/1.1 201 Created
+Content-Type: application/json
+```
+
+И JSON примерно такого вида:
+
+```json
+{"id":1,"username":"testuser","email":"testuser@example.com","created_at":"..."}
+```
+
+## Проверка ЛР3: авторизация и получение JWT
+
+```bash
+curl -i -X POST http://localhost:8080/users/login \
+  -H "Content-Type: application/json" \
+  -d '{"login":"testuser","password":"123456"}'
+```
+
+Ожидаемый ответ:
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+И JSON с токеном:
+
+```json
+{
+  "token": "JWT_TOKEN_HERE",
+  "expires_at": "...",
+  "user": {
+    "id": 1,
+    "username": "testuser",
+    "email": "testuser@example.com",
+    "created_at": "..."
+  }
+}
+```
+
+## Проверить пользователей в БД
+
+```bash
+docker exec -it mini-avito-postgres psql -U postgres -d mini_avito -c "SELECT id, username, email, created_at FROM users ORDER BY id DESC;"
+```
 
 ## Остановить проект
 
@@ -133,6 +186,8 @@ docker compose down
 docker compose down -v
 ```
 
+Это полезно, если хочешь заново зарегистрировать пользователя с тем же username/email.
+
 ## Что говорить на защите
 
-В ЛР1 был HTTP-сервер с `/test`, чистой архитектурой и graceful shutdown. В ЛР2 мы добавили PostgreSQL, инициализацию таблиц в repository и POST-хэндлер `/dbtest`, который получает строку из тела запроса и сохраняет её в базу. Теперь всё запускается через Docker Compose: отдельный контейнер для Go-сервера и отдельный контейнер для PostgreSQL.
+В ЛР1 был простой HTTP-сервер с `/test`, чистой архитектурой и graceful shutdown. В ЛР2 мы добавили PostgreSQL, инициализацию таблиц в repository и `/dbtest`, который пишет данные в БД. В ЛР3 мы добавили регистрацию и авторизацию: пользователь сохраняется в таблицу `users`, пароль хранится в виде хэша, а при логине сервер возвращает JWT-токен. Всё приложение теперь запускается через Docker Compose: отдельный контейнер для Go-сервера и отдельный контейнер для PostgreSQL.
