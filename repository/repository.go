@@ -21,6 +21,11 @@ type TestRepository interface {
 	GetDBTestByID(ctx context.Context, id int64) (DBTestRecord, error)
 	CreateUser(ctx context.Context, params CreateUserParams) (User, error)
 	GetUserByLogin(ctx context.Context, login string) (User, error)
+	
+	// Новые методы для 4 лабы
+	CreateAd(ctx context.Context, userID int64, title, description string, price float64, status string) (Ad, error)
+	GetAdsByUserID(ctx context.Context, userID int64) ([]Ad, error)
+	
 	Close() error
 }
 
@@ -42,6 +47,18 @@ type CreateUserParams struct {
 	Username     string
 	Email        string
 	PasswordHash string
+}
+
+// Структура для 4 лабы, соответствующая таблице ads
+type Ad struct {
+	ID          int64     `json:"id"`
+	UserID      int64     `json:"user_id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Price       float64   `json:"price"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type testRepository struct {
@@ -151,6 +168,51 @@ func (r *testRepository) GetUserByLogin(ctx context.Context, login string) (User
 	}
 
 	return user, nil
+}
+
+// Реализация создания объявления
+func (r *testRepository) CreateAd(ctx context.Context, userID int64, title, description string, price float64, status string) (Ad, error) {
+	const q = `
+		INSERT INTO ads (user_id, title, description, price, status)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, user_id, title, description, price, status, created_at, updated_at
+	`
+	var ad Ad
+	err := r.db.QueryRowContext(ctx, q, userID, title, description, price, status).
+		Scan(&ad.ID, &ad.UserID, &ad.Title, &ad.Description, &ad.Price, &ad.Status, &ad.CreatedAt, &ad.UpdatedAt)
+	if err != nil {
+		return Ad{}, fmt.Errorf("create ad: %w", err)
+	}
+	return ad, nil
+}
+
+// Реализация получения списка объявлений по ID пользователя
+func (r *testRepository) GetAdsByUserID(ctx context.Context, userID int64) ([]Ad, error) {
+	const q = `
+		SELECT id, user_id, title, description, price, status, created_at, updated_at
+		FROM ads
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get ads: %w", err)
+	}
+	defer rows.Close()
+
+	var ads []Ad
+	for rows.Next() {
+		var ad Ad
+		if err := rows.Scan(&ad.ID, &ad.UserID, &ad.Title, &ad.Description, &ad.Price, &ad.Status, &ad.CreatedAt, &ad.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan ad: %w", err)
+		}
+		ads = append(ads, ad)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+
+	return ads, nil
 }
 
 func (r *testRepository) Close() error {

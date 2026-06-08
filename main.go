@@ -44,10 +44,16 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/test", h.Test)
 	mux.HandleFunc("/dbtest", h.DBTest)
+	
+	// Роуты пользователей
 	mux.HandleFunc("/users/register", h.Register)
 	mux.HandleFunc("/users/login", h.Login)
 	mux.HandleFunc("/register", h.Register)
 	mux.HandleFunc("/login", h.Login)
+
+	// Роуты объявлений (ЛР 4)
+	mux.HandleFunc("/ads/create", h.CreateAd)
+	mux.HandleFunc("/ads", h.GetMyAds)
 
 	server := &http.Server{
 		Addr:    ":8080",

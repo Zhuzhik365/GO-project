@@ -25,6 +25,10 @@ type TestService interface {
 	SaveDBTest(ctx context.Context, body string) (repository.DBTestRecord, error)
 	RegisterUser(ctx context.Context, username, email, password string) (repository.User, error)
 	LoginUser(ctx context.Context, login, password string) (AuthResponse, error)
+	
+	// Новые методы для 4 лабы
+	CreateAd(ctx context.Context, userID int64, title, description string, price float64) (repository.Ad, error)
+	GetAdsByUserID(ctx context.Context, userID int64) ([]repository.Ad, error)
 }
 
 type AuthResponse struct {
@@ -118,6 +122,27 @@ func (s *testService) LoginUser(ctx context.Context, login, password string) (Au
 
 	user.PasswordHash = ""
 	return AuthResponse{Token: token, ExpiresAt: expiresAt, User: user}, nil
+}
+
+// Логика создания объявления
+func (s *testService) CreateAd(ctx context.Context, userID int64, title, description string, price float64) (repository.Ad, error) {
+	title = strings.TrimSpace(title)
+	description = strings.TrimSpace(description)
+
+	if title == "" || description == "" || userID <= 0 || price < 0 {
+		return repository.Ad{}, fmt.Errorf("%w: invalid ad data", ErrInvalidInput)
+	}
+
+	// По умолчанию объявление создается со статусом "active"
+	return s.repo.CreateAd(ctx, userID, title, description, price, "active")
+}
+
+// Логика получения списка объявлений
+func (s *testService) GetAdsByUserID(ctx context.Context, userID int64) ([]repository.Ad, error) {
+	if userID <= 0 {
+		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidInput)
+	}
+	return s.repo.GetAdsByUserID(ctx, userID)
 }
 
 func hashPassword(password string) (string, error) {
