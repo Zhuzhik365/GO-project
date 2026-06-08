@@ -45,15 +45,14 @@ func main() {
 	mux.HandleFunc("/test", h.Test)
 	mux.HandleFunc("/dbtest", h.DBTest)
 	
-	// Роуты пользователей
 	mux.HandleFunc("/users/register", h.Register)
 	mux.HandleFunc("/users/login", h.Login)
 	mux.HandleFunc("/register", h.Register)
 	mux.HandleFunc("/login", h.Login)
 
-	// Роуты объявлений (ЛР 4)
-	mux.HandleFunc("/ads/create", h.CreateAd)
-	mux.HandleFunc("/ads", h.GetMyAds)
+	// ОБНОВЛЕНИЕ ДЛЯ ЛР5: защищаем эндпоинты с помощью AuthMiddleware
+	mux.HandleFunc("/ads/create", h.AuthMiddleware(h.CreateAd))
+	mux.HandleFunc("/ads", h.AuthMiddleware(h.GetMyAds))
 
 	server := &http.Server{
 		Addr:    ":8080",

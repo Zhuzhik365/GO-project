@@ -1,16 +1,20 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-project/service"
 	"go-project/repository"
+	"go-project/service"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 )
+
+// Ключ для хранения данных в контексте
+type contextKey string
+const userIDKey contextKey = "user_id"
 
 type TestHandler struct {
 	service service.TestService
@@ -18,6 +22,37 @@ type TestHandler struct {
 
 func NewTestHandler(service service.TestService) *TestHandler {
 	return &TestHandler{service: service}
+}
+
+// НОВЫЙ КОД ДЛЯ ЛР5: Middleware для проверки JWT
+func (h *TestHandler) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Читаем заголовок Authorization
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "missing authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		// Проверяем формат "Bearer <token>"
+		parts := strings.Split(authHeader, " ")
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
+			return
+		}
+
+		// Парсим токен
+		token := parts[1]
+		userID, err := h.service.ParseToken(token)
+		if err != nil {
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		// Кладем userID в контекст и передаем управление следующему хэндлеру
+		ctx := context.WithValue(r.Context(), userIDKey, userID)
+		next(w, r.WithContext(ctx))
+	}
 }
 
 func (h *TestHandler) Test(w http.ResponseWriter, r *http.Request) {
@@ -117,19 +152,24 @@ func (h *TestHandler) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// Структура для приема JSON от клиента при создании объявления
+// ОБНОВЛЕННАЯ СТРУКТУРА: поле user_id удалено из запроса
 type createAdRequest struct {
-	UserID      int64   `json:"user_id"`
 	Title       string  `json:"title"`
 	Description string  `json:"description"`
 	Price       float64 `json:"price"`
 }
 
-// Хэндлер 1: Создание объявления
 func (h *TestHandler) CreateAd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// ЛР5: Получаем userID безопасно из контекста (он гарантированно там есть благодаря AuthMiddleware)
+	userID, ok := r.Context().Value(userIDKey).(int64)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -140,7 +180,7 @@ func (h *TestHandler) CreateAd(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	ad, err := h.service.CreateAd(r.Context(), req.UserID, req.Title, req.Description, req.Price)
+	ad, err := h.service.CreateAd(r.Context(), userID, req.Title, req.Description, req.Price)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -149,7 +189,6 @@ func (h *TestHandler) CreateAd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, ad)
 }
 
-// Хэндлер 2: Получение объявлений пользователя
 func (h *TestHandler) GetMyAds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -157,16 +196,10 @@ func (h *TestHandler) GetMyAds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// В 4 лабе берем user_id из query-параметров. В 5-й заменим на middleware.
-	userIDStr := r.URL.Query().Get("user_id")
-	if userIDStr == "" {
-		http.Error(w, "user_id query parameter is required", http.StatusBadRequest)
-		return
-	}
-
-	userID, err := strconv.ParseInt(userIDStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid user_id", http.StatusBadRequest)
+	// ЛР5: Извлекаем userID из контекста вместо URL query
+	userID, ok := r.Context().Value(userIDKey).(int64)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -176,7 +209,6 @@ func (h *TestHandler) GetMyAds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Если у пользователя пока нет объявлений, вернем пустой массив []
 	if ads == nil {
 		ads = []repository.Ad{}
 	}

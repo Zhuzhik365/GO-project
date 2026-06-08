@@ -26,9 +26,11 @@ type TestService interface {
 	RegisterUser(ctx context.Context, username, email, password string) (repository.User, error)
 	LoginUser(ctx context.Context, login, password string) (AuthResponse, error)
 	
-	// Новые методы для 4 лабы
 	CreateAd(ctx context.Context, userID int64, title, description string, price float64) (repository.Ad, error)
 	GetAdsByUserID(ctx context.Context, userID int64) ([]repository.Ad, error)
+	
+	// НОВЫЙ МЕТОД ДЛЯ ЛР5: парсинг и валидация токена
+	ParseToken(token string) (int64, error)
 }
 
 type AuthResponse struct {
@@ -124,7 +126,6 @@ func (s *testService) LoginUser(ctx context.Context, login, password string) (Au
 	return AuthResponse{Token: token, ExpiresAt: expiresAt, User: user}, nil
 }
 
-// Логика создания объявления
 func (s *testService) CreateAd(ctx context.Context, userID int64, title, description string, price float64) (repository.Ad, error) {
 	title = strings.TrimSpace(title)
 	description = strings.TrimSpace(description)
@@ -133,16 +134,50 @@ func (s *testService) CreateAd(ctx context.Context, userID int64, title, descrip
 		return repository.Ad{}, fmt.Errorf("%w: invalid ad data", ErrInvalidInput)
 	}
 
-	// По умолчанию объявление создается со статусом "active"
 	return s.repo.CreateAd(ctx, userID, title, description, price, "active")
 }
 
-// Логика получения списка объявлений
 func (s *testService) GetAdsByUserID(ctx context.Context, userID int64) ([]repository.Ad, error) {
 	if userID <= 0 {
 		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidInput)
 	}
 	return s.repo.GetAdsByUserID(ctx, userID)
+}
+
+// НОВАЯ ЛОГИКА ДЛЯ ЛР5: Метод проверки токена
+func (s *testService) ParseToken(token string) (int64, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0, errors.New("invalid token format")
+	}
+
+	// Проверяем подпись (signature) токена
+	mac := hmac.New(sha256.New, s.jwtSecret)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	expectedSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedSignature)) {
+		return 0, errors.New("invalid token signature")
+	}
+
+	// Декодируем тело токена (payload)
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, err
+	}
+
+	var payload jwtPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return 0, err
+	}
+
+	// Проверяем срок действия
+	if time.Now().Unix() > payload.Expires {
+		return 0, errors.New("token expired")
+	}
+
+	// Возвращаем ID пользователя
+	return payload.UserID, nil
 }
 
 func hashPassword(password string) (string, error) {
