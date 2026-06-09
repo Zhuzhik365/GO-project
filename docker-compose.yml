@@ -1,19 +1,41 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_TARGET: app
     container_name: mini-avito-app
-    depends_on:
-      postgres:
-        condition: service_healthy
+    restart: unless-stopped
     environment:
       POSTGRES_DSN: postgres://postgres:postgres@postgres:5432/mini_avito?sslmode=disable
       JWT_SECRET: dev-secret-change-me
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     ports:
       - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  processor:
+    build:
+      context: .
+      args:
+        BUILD_TARGET: processor
+    container_name: mini-avito-processor
+    restart: unless-stopped
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      PROCESSING_DELAY: 3s
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
     container_name: mini-avito-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -28,5 +50,48 @@ services:
       timeout: 5s
       retries: 10
 
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: mini-avito-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: mini-avito-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: mini-avito-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
+  grafana_data:
