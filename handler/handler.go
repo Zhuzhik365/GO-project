@@ -5,94 +5,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-project/repository"
-	"go-project/service"
 	"io"
 	"net/http"
 	"strings"
+
+	"go-project/repository"
+	"go-project/service"
 )
 
-// Ключ для хранения данных в контексте
 type contextKey string
+
 const userIDKey contextKey = "user_id"
 
-type TestHandler struct {
-	service service.TestService
-}
-
-func NewTestHandler(service service.TestService) *TestHandler {
-	return &TestHandler{service: service}
-}
-
-// НОВЫЙ КОД ДЛЯ ЛР5: Middleware для проверки JWT
-func (h *TestHandler) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Читаем заголовок Authorization
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "missing authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		// Проверяем формат "Bearer <token>"
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
-			return
-		}
-
-		// Парсим токен
-		token := parts[1]
-		userID, err := h.service.ParseToken(token)
-		if err != nil {
-			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
-			return
-		}
-
-		// Кладем userID в контекст и передаем управление следующему хэндлеру
-		ctx := context.WithValue(r.Context(), userIDKey, userID)
-		next(w, r.WithContext(ctx))
-	}
-}
-
-func (h *TestHandler) Test(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	msg := h.service.GetMessage()
-	fmt.Fprint(w, msg)
-}
-
-func (h *TestHandler) DBTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	body := strings.TrimSpace(string(bodyBytes))
-	if body == "" {
-		http.Error(w, "request body is empty", http.StatusBadRequest)
-		return
-	}
-
-	record, err := h.service.SaveDBTest(r.Context(), body)
-	if err != nil {
-		http.Error(w, "failed to save body to database", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, record)
+type Handler struct {
+	service service.Service
 }
 
 type registerRequest struct {
@@ -101,7 +27,53 @@ type registerRequest struct {
 	Password string `json:"password"`
 }
 
-func (h *TestHandler) Register(w http.ResponseWriter, r *http.Request) {
+type loginRequest struct {
+	Login    string `json:"login"`
+	Password string `json:"password"`
+}
+
+type createAdRequest struct {
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+	Price       float64 `json:"price"`
+}
+
+func New(s service.Service) *Handler {
+	return &Handler{service: s}
+}
+
+func (h *Handler) Test(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	fmt.Fprint(w, h.service.GetMessage())
+}
+
+func (h *Handler) DBTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	defer r.Body.Close()
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+
+	record, err := h.service.CreateDBTest(r.Context(), string(body))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, record)
+}
+
+func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -113,23 +85,16 @@ func (h *TestHandler) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	user, err := h.service.RegisterUser(r.Context(), req.Username, req.Email, req.Password)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusCreated, user)
 }
 
-type loginRequest struct {
-	Login    string `json:"login"`
-	Password string `json:"password"`
-}
-
-func (h *TestHandler) Login(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -141,35 +106,25 @@ func (h *TestHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
-	response, err := h.service.LoginUser(r.Context(), req.Login, req.Password)
+	resp, err := h.service.LoginUser(r.Context(), req.Login, req.Password)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// ОБНОВЛЕННАЯ СТРУКТУРА: поле user_id удалено из запроса
-type createAdRequest struct {
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Price       float64 `json:"price"`
-}
-
-func (h *TestHandler) CreateAd(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateAd(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// ЛР5: Получаем userID безопасно из контекста (он гарантированно там есть благодаря AuthMiddleware)
 	userID, ok := r.Context().Value(userIDKey).(int64)
-	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if !ok || userID <= 0 {
+		http.Error(w, "user id not found in context", http.StatusUnauthorized)
 		return
 	}
 
@@ -178,28 +133,25 @@ func (h *TestHandler) CreateAd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	ad, err := h.service.CreateAd(r.Context(), userID, req.Title, req.Description, req.Price)
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
-
 	writeJSON(w, http.StatusCreated, ad)
 }
 
-func (h *TestHandler) GetMyAds(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) GetMyAds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// ЛР5: Извлекаем userID из контекста вместо URL query
 	userID, ok := r.Context().Value(userIDKey).(int64)
-	if !ok {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	if !ok || userID <= 0 {
+		http.Error(w, "user id not found in context", http.StatusUnauthorized)
 		return
 	}
 
@@ -208,29 +160,53 @@ func (h *TestHandler) GetMyAds(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-
-	if ads == nil {
-		ads = []repository.Ad{}
-	}
-
 	writeJSON(w, http.StatusOK, ads)
+}
+
+func (h *Handler) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "missing authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
+			return
+		}
+
+		userID, err := h.service.ParseToken(parts[1])
+		if err != nil {
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		ctx := contextWithUserID(r.Context(), userID)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+func contextWithUserID(ctx context.Context, userID int64) context.Context {
+	return context.WithValue(ctx, userIDKey, userID)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, service.ErrUserAlreadyExists):
-		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, service.ErrInvalidCredentials):
+	case errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrInvalidToken):
 		http.Error(w, err.Error(), http.StatusUnauthorized)
+	case errors.Is(err, repository.ErrUserAlreadyExists):
+		http.Error(w, err.Error(), http.StatusConflict)
 	default:
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
 }
